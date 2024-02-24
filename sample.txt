@@ -1,0 +1,172 @@
+
+// 検査対象列
+INSPECT_TARGET_COL = 3;
+
+// 強調対象
+KEYWORDS = [
+	"aaa",
+	"bbb",
+];
+
+// 起点となるディレクトリ
+var startDir = "c:/path/to/dir";
+
+var fs = new ActiveXObject("Scripting.FileSystemObject");
+
+// 走査が未完了のフォルダのリスト
+var stk = [ startDir ];
+
+// 検出したファイル
+var targetFiles = [];
+
+while (stk.length > 0) {
+
+	// 末尾の要素を取り出す
+	var currentDir = stk[stk.length-1];
+	stk.pop();
+
+	// 存在しないパスなら除外
+	if (fs.FolderExists(currentDir) == false) {
+		WScript.Echo("Warning: folder does not exist : " + currentDir);
+		continue;
+	}
+
+	var folder = fs.GetFolder(currentDir);
+
+	// フォルダ内のファイルを列挙
+	var e = new Enumerator(folder.Files);
+	for ( ; !e.atEnd(); e.moveNext()) {
+		var file = e.item();
+
+		// ファイルがExcelファイルなら対象リストに加える
+		if (IsExcelFile(file.Path) == false) {
+			continue;
+		}
+		targetFiles.push(file.Path);
+	}
+
+	// サブフォルダを列挙
+	e = new Enumerator(folder.SubFolders);
+	for (; !e.atEnd(); e.moveNext()) {
+		var f = e.item();
+
+		if (fs.FolderExists(f.Path) == false) {
+			continue;
+		}
+		stk.push(f.Path);
+	}
+}
+
+WScript.Echo("検出したファイル数:" + targetFiles.length);
+if (targetFiles.length == 0) {
+	WScript.Quit(0);
+}
+
+var excel = new ActiveXObject("Excel.Application");
+excel.Visible = false;
+
+// 前段で検出した各Excelファイルの検査を実施
+for (var i in targetFiles) {
+	InspectFile(excel, targetFiles[i]);
+}
+
+excel.Quit();
+WScript.Quit(0);
+
+// Excelファイルか?
+function IsExcelFile(filePath)
+{
+	if (fs.FileExists(filePath) == false) {
+		return false;
+	}
+	// 拡張子で判断する
+	return /^.+\.xls.?$/.test(filePath);
+}
+
+// ファイルを検査する
+// @param excel Excelアプリケーション
+// @param filePath 検査対象ファイルパス
+function InspectFile(excel, filePath)
+{
+	// WorkBookとして開く
+	var wb = excel.Workbooks.Open(filePath);
+
+	// 所定のシートを開く
+	var sheet = wb.WorkSheets(1);
+
+	// キーワードにマッチしたセル数
+	var matchCount = 0;
+
+	// 空行の連続カウント(一定数連続したらコンテンツ終了と判断する)
+	var emptyCount = 0;
+
+	for (var row = 1;; ++row) {
+
+		// 空行かどうかを判断する
+		if (IsEmptyRow(sheet, row)) {
+			emptyCount++;
+		}
+		else {
+			// 連続記録のリセット
+			emptyCount = 0;
+		}
+		if (emptyCount >= 20) {
+			break;
+		}
+
+		// キーワードが含まれるか探す
+		var text = sheet.Cells(row, INSPECT_TARGET_COL).text;
+		if (IsMatchKeyword(text, KEYWORDS) == false) {
+			continue;
+		}
+
+		// キーワードが含まれる箇所を強調
+		sheet.Cells(row, INSPECT_TARGET_COL).Interior.Color = 0xFF0000;
+
+		matchCount++;
+	}
+
+	// 変更があったので保存
+	if (matchCount > 0) {
+		wb.Save();
+	}
+
+	// Workbookファイルを閉じて、ファイルのマッチ件数をレポートする
+	wb.Close();
+	WScript.Echo(filePath + "\t" + matchCount);
+	return matchCount > 0;
+}
+
+// 空行か?
+// @param sheet WorkSheetオブジェクト
+// @param row 判定対象行番号
+function IsEmptyRow(sheet, row)
+{
+	// 着目する列すべてに文字列が全くない場合は空とみなす
+	for (col = 1; col < 20; ++col) {
+		if (sheet.Cells(row, col).value == null) {
+			continue;
+		}
+		// 一つでも何かあれば空行ではない
+		return false;
+	}
+	return true;
+}
+
+// キーワードリストに含まれるキーワードでマッチするものがあるか?
+// @return true:マッチ false:マッチしない
+// @param text キーワード
+// @param keywords キーワードリスト
+function IsMatchKeyword(text, keywords)
+{
+	for (var i in keywords) {
+		if (text != keywords[i]) {
+			continue;
+		}
+		// あった
+		return true;
+	}
+	// なかった
+	return false;
+}
+
